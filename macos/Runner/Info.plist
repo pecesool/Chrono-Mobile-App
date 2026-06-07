@@ -28,5 +28,9 @@
 	<string>MainMenu</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Used to capture voice commands for task filtering</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Used to convert your voice into task search queries</string>
 </dict>
 </plist>

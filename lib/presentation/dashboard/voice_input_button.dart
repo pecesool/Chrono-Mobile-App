@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:speech_to_text/speech_to_text.dart';
 import '../../core/constants/app_theme.dart';
-import '../../core/constants/app_strings.dart';
 import '../../core/utils/date_utils.dart';
 import '../../data/models/task.dart';
 import '../../domain/ai_engine/voice_parser.dart';
@@ -63,9 +63,12 @@ class _VoiceSheet extends StatefulWidget {
 
 class _VoiceSheetState extends State<_VoiceSheet> {
   final _controller = TextEditingController();
-  bool _showInput = false;
-  String _simulated = '';
-  bool _isSimulating = false;
+  final _speech = SpeechToText();
+  bool _isListening = false;
+  bool _speechAvailable = false;
+  // null = not yet checked, false = unavailable, true = available
+  bool? _speechChecked;
+  String _statusText = 'Tap mic or type below';
 
   final _examples = [
     'morning tasks',
@@ -78,22 +81,82 @@ class _VoiceSheetState extends State<_VoiceSheet> {
   ];
 
   @override
+  void initState() {
+    super.initState();
+    _initSpeech();
+  }
+
+  Future<void> _initSpeech() async {
+    _speechAvailable = await _speech.initialize(
+      onError: (e) {
+        if (!mounted) return;
+        setState(() {
+          _isListening = false;
+          _statusText = 'Mic error — type your command below';
+        });
+      },
+      onStatus: (status) {
+        if (!mounted) return;
+        if (status == 'done' || status == 'notListening') {
+          final hasText = _controller.text.trim().isNotEmpty;
+          setState(() {
+            _isListening = false;
+            _statusText = hasText ? 'Got it — tap Find or edit below' : 'No speech detected — type below';
+          });
+        }
+      },
+    );
+    if (mounted) {
+      setState(() => _speechChecked = _speechAvailable);
+    }
+  }
+
+  @override
   void dispose() {
+    _speech.stop();
     _controller.dispose();
     super.dispose();
   }
 
-  void _simulateVoice() async {
-    setState(() => _isSimulating = true);
-    await Future.delayed(const Duration(seconds: 2));
+  Future<void> _toggleListening() async {
+    if (!_speechAvailable) {
+      setState(() => _statusText = 'Voice not available — type your command below');
+      return;
+    }
 
-    if (!mounted) return;
+    if (_isListening) {
+      await _speech.stop();
+      final hasText = _controller.text.trim().isNotEmpty;
+      setState(() {
+        _isListening = false;
+        _statusText = hasText ? 'Got it — tap Find or edit below' : 'No speech detected — type below';
+      });
+      return;
+    }
+
+    _controller.clear();
     setState(() {
-      _isSimulating = false;
-      _simulated = 'Do all long tasks in the morning';
-      _controller.text = _simulated;
-      _showInput = true;
+      _isListening = true;
+      _statusText = 'Listening… speak now';
     });
+
+    await _speech.listen(
+      onResult: (result) {
+        if (!mounted) return;
+        setState(() {
+          _controller.text = result.recognizedWords;
+          if (result.finalResult) {
+            _isListening = false;
+            _statusText = result.recognizedWords.trim().isEmpty
+                ? 'No speech detected — type below'
+                : 'Got it — tap Find or edit below';
+          }
+        });
+      },
+      listenFor: const Duration(seconds: 20),
+      pauseFor: const Duration(seconds: 3),
+      localeId: 'en_US',
+    );
   }
 
   void _process(String text) {
@@ -147,36 +210,66 @@ class _VoiceSheetState extends State<_VoiceSheet> {
             const SizedBox(height: 4),
             const Align(
               alignment: Alignment.centerLeft,
-              child: Text('Hold mic to record, or type / pick a hint',
+              child: Text('Tap mic to record, or type / pick a hint',
                   style: TextStyle(fontSize: 12, color: AppTheme.textMuted)),
             ),
-            const SizedBox(height: 16),
+
+            // banner shown when speech recognition is unavailable (e.g. iOS Simulator)
+            if (_speechChecked == false) ...[
+              const SizedBox(height: 10),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                decoration: BoxDecoration(
+                  color: AppTheme.mediumPriority.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: AppTheme.mediumPriority.withOpacity(0.3)),
+                ),
+                child: const Row(children: [
+                  Icon(Icons.info_outline, color: AppTheme.mediumPriority, size: 14),
+                  SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      'Voice unavailable on Simulator — type or pick a hint below. Works on a real device.',
+                      style: TextStyle(fontSize: 11, color: AppTheme.mediumPriority),
+                    ),
+                  ),
+                ]),
+              ),
+            ],
+
+            const SizedBox(height: 12),
 
             GestureDetector(
-              onTap: _simulateVoice,
+              onTap: _toggleListening,
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 300),
                 width: 64,
                 height: 64,
                 decoration: BoxDecoration(
-                  gradient: _isSimulating
+                  gradient: _isListening
                       ? const LinearGradient(
                           colors: [AppTheme.highPriority, AppTheme.mediumPriority])
-                      : AppTheme.primaryGradient,
+                      : _speechAvailable
+                          ? AppTheme.primaryGradient
+                          : LinearGradient(colors: [
+                              AppTheme.textMuted.withOpacity(0.4),
+                              AppTheme.textMuted.withOpacity(0.25),
+                            ]),
                   shape: BoxShape.circle,
                   boxShadow: [
                     BoxShadow(
-                      color: (_isSimulating
+                      color: (_isListening
                               ? AppTheme.highPriority
                               : AppTheme.primary)
-                          .withOpacity(0.5),
+                          .withOpacity(_speechAvailable ? 0.5 : 0.15),
                       blurRadius: 18,
-                      spreadRadius: _isSimulating ? 5 : 2,
+                      spreadRadius: _isListening ? 5 : 2,
                     ),
                   ],
                 ),
                 child: Icon(
-                  _isSimulating ? Icons.mic : Icons.mic_none,
+                  _isListening ? Icons.mic : Icons.mic_none,
                   color: Colors.white,
                   size: 26,
                 ),
@@ -184,59 +277,42 @@ class _VoiceSheetState extends State<_VoiceSheet> {
             ),
             const SizedBox(height: 6),
             Text(
-              _isSimulating ? 'Listening...' : 'Tap to record',
+              _statusText,
               style: TextStyle(
                   fontSize: 12,
-                  color: _isSimulating
-                      ? AppTheme.highPriority
-                      : AppTheme.textMuted),
+                  color: _isListening ? AppTheme.highPriority : AppTheme.textMuted),
             ),
 
-            const SizedBox(height: 16),
+            const SizedBox(height: 14),
 
-            if (_showInput || _simulated.isNotEmpty) ...[
-              TextField(
-                controller: _controller,
-                style: const TextStyle(
-                    color: AppTheme.textPrimary, fontSize: 14),
-                decoration: InputDecoration(
-                  hintText: 'Edit or type your command...',
-                  hintStyle: const TextStyle(
-                      color: AppTheme.textMuted, fontSize: 13),
-                  filled: true,
-                  fillColor: AppTheme.cardBg,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide.none,
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(
-                        color: AppTheme.primary, width: 1.5),
-                  ),
-                  prefixIcon: const Icon(Icons.edit_outlined,
-                      color: AppTheme.textMuted, size: 16),
-                  suffixIcon: IconButton(
-                    icon: const Icon(Icons.clear,
-                        color: AppTheme.textMuted, size: 16),
-                    onPressed: () => _controller.clear(),
-                  ),
-                  contentPadding: const EdgeInsets.symmetric(vertical: 12),
+            // text field is always visible
+            TextField(
+              controller: _controller,
+              style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14),
+              decoration: InputDecoration(
+                hintText: 'Type your command here…',
+                hintStyle: const TextStyle(color: AppTheme.textMuted, fontSize: 13),
+                filled: true,
+                fillColor: AppTheme.cardBg,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide.none,
                 ),
-                onSubmitted: _process,
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: AppTheme.primary, width: 1.5),
+                ),
+                prefixIcon: const Icon(Icons.edit_outlined,
+                    color: AppTheme.textMuted, size: 16),
+                suffixIcon: IconButton(
+                  icon: const Icon(Icons.clear, color: AppTheme.textMuted, size: 16),
+                  onPressed: () => _controller.clear(),
+                ),
+                contentPadding: const EdgeInsets.symmetric(vertical: 12),
               ),
-              const SizedBox(height: 10),
-            ] else ...[
-              TextButton.icon(
-                onPressed: () => setState(() => _showInput = true),
-                icon: const Icon(Icons.keyboard_alt_outlined,
-                    size: 14, color: AppTheme.textSecondary),
-                label: const Text('Type instead',
-                    style: TextStyle(
-                        color: AppTheme.textSecondary, fontSize: 12)),
-              ),
-              const SizedBox(height: 6),
-            ],
+              onSubmitted: _process,
+            ),
+            const SizedBox(height: 10),
 
             SizedBox(
               height: 30,
@@ -245,10 +321,7 @@ class _VoiceSheetState extends State<_VoiceSheet> {
                 children: _examples
                     .map((e) => _ExampleChip(
                           text: e,
-                          onTap: () {
-                            _controller.text = e;
-                            setState(() => _showInput = true);
-                          },
+                          onTap: () => _controller.text = e,
                         ))
                     .toList(),
               ),
