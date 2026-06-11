@@ -261,10 +261,18 @@ class TaskNotifier extends StateNotifier<List<Task>> {
     final allToOptimize = [...scheduled, ...unscheduled];
     if (allToOptimize.isEmpty) return [];
 
-    // Создаём "виртуальные" задачи без времени для переплану
-    final virtualTasks = allToOptimize
-        .map((t) => t.copyWith(scheduledStart: null))
-        .toList();
+    // Восстанавливаем полную продолжительность задач, которые были разбиты:
+    // оригинальная задача хранит только первый кусок, остальное в _part_ задачах.
+    final virtualTasks = allToOptimize.map((t) {
+      final parts = state
+          .where((p) => p.id.startsWith('${t.id}_part_') && !p.isCompleted)
+          .toList();
+      final totalMinutes = parts.fold(
+        t.estimatedMinutes,
+        (sum, p) => sum + p.estimatedMinutes,
+      );
+      return t.copyWith(scheduledStart: null, estimatedMinutes: totalMinutes);
+    }).toList();
 
     // Строим расписание заново с нуля
     final suggestions = scheduler.scheduleMultiDay(

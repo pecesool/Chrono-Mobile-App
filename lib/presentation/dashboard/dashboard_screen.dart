@@ -127,11 +127,12 @@ class DashboardScreen extends ConsumerWidget {
 
   Widget _buildHeader(BuildContext context, WidgetRef ref, int taskCount, int unscheduledCount) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 6),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               ShaderMask(
                 shaderCallback: (b) => AppTheme.primaryGradient.createShader(b),
@@ -141,52 +142,39 @@ class DashboardScreen extends ConsumerWidget {
                         fontWeight: FontWeight.bold,
                         color: Colors.white)),
               ),
-              const Spacer(),
-              Flexible(
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: [
-                      _HeaderButton(
-                        label: 'Schedule',
-                        icon: Icons.calendar_month,
-                        color: AppTheme.accent,
-                        onTap: () => _onSchedule(context, ref),
-                      ),
-                      const SizedBox(width: 6),
-                      _HeaderButton(
-                        label: 'Optimize',
-                        icon: Icons.auto_awesome,
-                        color: AppTheme.primary,
-                        onTap: () => _onOptimize(context, ref),
-                      ),
-                    ],
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _HeaderButton(
+                    label: 'Schedule',
+                    icon: Icons.calendar_month,
+                    color: AppTheme.accent,
+                    onTap: () => _onSchedule(context, ref),
                   ),
-                ),
+                  const SizedBox(width: 6),
+                  _HeaderButton(
+                    label: 'Optimize',
+                    icon: Icons.auto_awesome,
+                    color: AppTheme.primary,
+                    onTap: () => _onOptimize(context, ref),
+                  ),
+                ],
               ),
             ],
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 8),
           Row(
             children: [
-              Expanded(
-                child: _StatCard(
-                  label: 'Tasks',
-                  value: '$taskCount',
-                  icon: Icons.check_circle_outline,
-                  color: AppTheme.lowPriority,
-                ),
+              _MiniStat(
+                label: 'Scheduled',
+                value: '$taskCount',
+                color: AppTheme.lowPriority,
               ),
               const SizedBox(width: 8),
-              Expanded(
-                child: _StatCard(
-                  label: 'Unscheduled',
-                  value: '$unscheduledCount',
-                  icon: Icons.schedule_outlined,
-                  color: unscheduledCount > 0
-                      ? AppTheme.mediumPriority
-                      : AppTheme.textMuted,
-                ),
+              _MiniStat(
+                label: 'Unscheduled',
+                value: '$unscheduledCount',
+                color: unscheduledCount > 0 ? AppTheme.mediumPriority : AppTheme.textMuted,
               ),
             ],
           ).animate().fadeIn(delay: 200.ms),
@@ -199,8 +187,8 @@ class DashboardScreen extends ConsumerWidget {
     final unscheduled = ref.read(unscheduledTasksProvider);
     if (unscheduled.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('No unscheduled tasks'),
-        backgroundColor: AppTheme.surface,
+        content: Text('All tasks are already scheduled'),
+        backgroundColor: AppTheme.cardBg,
       ));
       return;
     }
@@ -208,16 +196,37 @@ class DashboardScreen extends ConsumerWidget {
       final suggestions = await ref.read(taskNotifierProvider.notifier).scheduleUnscheduled();
       if (!context.mounted) return;
       if (suggestions.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Could not find free slots'),
-          backgroundColor: AppTheme.surface,
-        ));
+        showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: AppTheme.surface,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: const Row(children: [
+              Icon(Icons.warning_amber_rounded, color: AppTheme.mediumPriority, size: 20),
+              SizedBox(width: 8),
+              Text('No free slots', style: TextStyle(color: AppTheme.textPrimary, fontSize: 16)),
+            ]),
+            content: const Text(
+              'Your schedule is packed for the deadline days of these tasks.\n\nTry:\n• Moving a task deadline to a later date\n• Deleting a scheduled task to free up time\n• Editing the task duration',
+              style: TextStyle(color: AppTheme.textSecondary, fontSize: 13, height: 1.5),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('OK', style: TextStyle(color: AppTheme.primaryLight)),
+              ),
+            ],
+          ),
+        );
       } else {
         _showSuggestionsSheet(context, ref, suggestions, title: 'Schedule Plan', allowEdit: true);
       }
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Error: $e'),
+          backgroundColor: AppTheme.highPriority,
+        ));
       }
     }
   }
@@ -320,26 +329,24 @@ class _HeaderButton extends StatelessWidget {
   }
 }
 
-class _StatCard extends StatelessWidget {
+class _MiniStat extends StatelessWidget {
   final String label;
   final String value;
-  final IconData icon;
   final Color color;
-  const _StatCard({required this.label, required this.value, required this.icon, required this.color});
+  const _MiniStat({required this.label, required this.value, required this.color});
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(color: AppTheme.cardBg, borderRadius: BorderRadius.circular(14), border: Border.all(color: AppTheme.surfaceLight.withOpacity(0.5))),
-      child: Row(children: [
-        Container(padding: const EdgeInsets.all(7), decoration: BoxDecoration(color: color.withOpacity(0.15), borderRadius: BorderRadius.circular(8)), child: Icon(icon, color: color, size: 14)),
-        const SizedBox(width: 8),
-        Flexible(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(value, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppTheme.textPrimary), overflow: TextOverflow.ellipsis),
-            Text(label, style: const TextStyle(fontSize: 10, color: AppTheme.textMuted), overflow: TextOverflow.ellipsis),
-          ]),
-        ),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withOpacity(0.25)),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Text(value, style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: color)),
+        const SizedBox(width: 4),
+        Text(label, style: const TextStyle(fontSize: 11, color: AppTheme.textMuted)),
       ]),
     );
   }
@@ -610,8 +617,9 @@ class _SuggestionsSheetState extends State<_SuggestionsSheet> {
                     width: double.infinity,
                     child: ElevatedButton(
                       onPressed: () async {
+                        final nav = Navigator.of(context);
                         await widget.ref.read(taskNotifierProvider.notifier).applySuggestions(_suggestions);
-                        if (mounted) Navigator.pop(context);
+                        if (mounted) nav.pop();
                       },
                       style: ElevatedButton.styleFrom(
                         backgroundColor: AppTheme.lowPriority,

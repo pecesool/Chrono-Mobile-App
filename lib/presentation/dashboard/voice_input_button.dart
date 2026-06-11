@@ -71,13 +71,14 @@ class _VoiceSheetState extends State<_VoiceSheet> {
   String _statusText = 'Tap mic or type below';
 
   final _examples = [
-    'morning tasks',
-    'long tasks evening',
-    'show short tasks',
+    'tasks for tomorrow',
     'high priority',
-    'all tasks',
-    'утром долгие задачи',
-    'вечером короткие',
+    'today morning',
+    'this week',
+    'unscheduled',
+    'overdue',
+    'long tasks evening',
+    'short tasks',
   ];
 
   @override

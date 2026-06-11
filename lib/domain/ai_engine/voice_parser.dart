@@ -30,18 +30,61 @@ class DurationFilter {
   }
 }
 
+enum DayScope { today, tomorrow, thisWeek, overdue, unscheduled }
+
+class DayFilter {
+  final DayScope scope;
+
+  DayFilter(this.scope);
+
+  bool matches(Task task) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final tomorrow = today.add(const Duration(days: 1));
+    final weekEnd = today.add(const Duration(days: 7));
+
+    switch (scope) {
+      case DayScope.today:
+        if (task.scheduledStart == null) return false;
+        final s = task.scheduledStart!;
+        return s.year == today.year && s.month == today.month && s.day == today.day;
+
+      case DayScope.tomorrow:
+        if (task.scheduledStart == null) return false;
+        final s = task.scheduledStart!;
+        return s.year == tomorrow.year &&
+            s.month == tomorrow.month &&
+            s.day == tomorrow.day;
+
+      case DayScope.thisWeek:
+        if (task.scheduledStart == null) return false;
+        final s = DateTime(task.scheduledStart!.year, task.scheduledStart!.month,
+            task.scheduledStart!.day);
+        return !s.isBefore(today) && s.isBefore(weekEnd);
+
+      case DayScope.overdue:
+        final deadline = DateTime(
+            task.deadline.year, task.deadline.month, task.deadline.day);
+        return deadline.isBefore(today) && !task.isCompleted;
+
+      case DayScope.unscheduled:
+        return task.scheduledStart == null && !task.isCompleted;
+    }
+  }
+}
+
 class VoiceCommand {
   final TimeFilter? timeFilter;
   final DurationFilter? durationFilter;
   final Priority? priorityFilter;
-  final String scope;
+  final DayFilter? dayFilter;
   final String action;
 
   VoiceCommand({
     this.timeFilter,
     this.durationFilter,
     this.priorityFilter,
-    this.scope = 'all',
+    this.dayFilter,
     this.action = 'schedule',
   });
 }
@@ -53,7 +96,7 @@ class VoiceIntentParser {
       timeFilter: _extractTime(lower),
       durationFilter: _extractDuration(lower),
       priorityFilter: _extractPriority(lower),
-      scope: _extractScope(lower),
+      dayFilter: _extractDay(lower),
       action: _extractAction(lower),
     );
   }
@@ -96,25 +139,54 @@ class VoiceIntentParser {
   }
 
   Priority? _extractPriority(String text) {
+    // High priority — many natural ways to say it
     if (text.contains('high') || text.contains('important') ||
-        text.contains('urgent') || text.contains('высок') ||
-        text.contains('важн') || text.contains('срочн')) {
-      return Priority.high;
+        text.contains('urgent') || text.contains('critical') ||
+        text.contains('top') || text.contains('most') ||
+        text.contains('priorit') || // covers "priority", "prioritized", "prioritized"
+        text.contains('высок') || text.contains('важн') ||
+        text.contains('срочн') || text.contains('главн') ||
+        text.contains('первоочеред')) {
+      // If they said "low" alongside "most", skip to low check below
+      if (!text.contains('low') && !text.contains('низк')) {
+        return Priority.high;
+      }
     }
     if (text.contains('low') || text.contains('низк') ||
-        text.contains('необязательн')) {
+        text.contains('необязательн') || text.contains('unimportant') ||
+        text.contains('least')) {
       return Priority.low;
     }
-    if (text.contains('medium') || text.contains('средн')) {
+    if (text.contains('medium') || text.contains('средн') ||
+        text.contains('normal') || text.contains('regular')) {
       return Priority.medium;
     }
     return null;
   }
 
-  String _extractScope(String text) {
-    if (text.contains('all') || text.contains('every') ||
-        text.contains('все') || text.contains('всех')) return 'all';
-    return 'all';
+  DayFilter? _extractDay(String text) {
+    if (text.contains('tomorrow') || text.contains('завтра')) {
+      return DayFilter(DayScope.tomorrow);
+    }
+    if (text.contains('today') || text.contains('сегодня') ||
+        text.contains('this day')) {
+      return DayFilter(DayScope.today);
+    }
+    if (text.contains('this week') || text.contains('week') ||
+        text.contains('эту неделю') || text.contains('недел')) {
+      return DayFilter(DayScope.thisWeek);
+    }
+    if (text.contains('overdue') || text.contains('late') ||
+        text.contains('missed') || text.contains('просрочен') ||
+        text.contains('опоздал')) {
+      return DayFilter(DayScope.overdue);
+    }
+    if (text.contains('unscheduled') || text.contains('not scheduled') ||
+        text.contains('without time') || text.contains('незапланиров') ||
+        text.contains('без времени')) {
+      return DayFilter(DayScope.unscheduled);
+    }
+    return null;
   }
 
   String _extractAction(String text) {
@@ -133,18 +205,37 @@ class VoiceIntentParser {
           command.durationFilter?.matches(t.estimatedMinutes) ?? true;
       final priorityOk = command.priorityFilter == null ||
           t.priority == command.priorityFilter;
-      return timeOk && durationOk && priorityOk;
+      final dayOk = command.dayFilter?.matches(t) ?? true;
+      return timeOk && durationOk && priorityOk && dayOk;
     }).toList();
   }
 
   String generateExplanation(VoiceCommand command) {
     final parts = <String>[];
 
+    if (command.dayFilter != null) {
+      switch (command.dayFilter!.scope) {
+        case DayScope.today: parts.add('today'); break;
+        case DayScope.tomorrow: parts.add('tomorrow'); break;
+        case DayScope.thisWeek: parts.add('this week'); break;
+        case DayScope.overdue: parts.add('overdue tasks'); break;
+        case DayScope.unscheduled: parts.add('unscheduled tasks'); break;
+      }
+    }
+
     if (command.timeFilter != null) {
-      if (command.timeFilter!.beforeHour == 12) parts.add('morning slots');
-      else if (command.timeFilter!.afterHour == 17) parts.add('evening slots');
-      else if (command.timeFilter!.afterHour == 22) parts.add('night slots');
-      else if (command.timeFilter!.between != null) parts.add('afternoon slots');
+      if (command.timeFilter!.beforeHour == 12) parts.add('morning');
+      else if (command.timeFilter!.afterHour == 22) parts.add('night');
+      else if (command.timeFilter!.afterHour == 17) parts.add('evening');
+      else if (command.timeFilter!.between != null) parts.add('afternoon');
+    }
+
+    if (command.priorityFilter != null) {
+      switch (command.priorityFilter!) {
+        case Priority.high: parts.add('high priority'); break;
+        case Priority.medium: parts.add('medium priority'); break;
+        case Priority.low: parts.add('low priority'); break;
+      }
     }
 
     if (command.durationFilter != null) {
@@ -156,14 +247,6 @@ class VoiceIntentParser {
         parts.add('short tasks (≤${command.durationFilter!.maxMinutes}min)');
       else
         parts.add('medium tasks');
-    }
-
-    if (command.priorityFilter != null) {
-      switch (command.priorityFilter!) {
-        case Priority.high: parts.add('high priority'); break;
-        case Priority.medium: parts.add('medium priority'); break;
-        case Priority.low: parts.add('low priority'); break;
-      }
     }
 
     if (parts.isEmpty) return 'Showing all tasks';
