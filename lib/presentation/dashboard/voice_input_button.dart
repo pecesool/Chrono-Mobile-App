@@ -74,11 +74,11 @@ class _VoiceSheetState extends State<_VoiceSheet> {
     'tasks for tomorrow',
     'high priority',
     'today morning',
-    'this week',
     'unscheduled',
-    'overdue',
-    'long tasks evening',
+    'done tasks',
+    '30 min tasks',
     'short tasks',
+    'this week',
   ];
 
   @override
@@ -170,7 +170,8 @@ class _VoiceSheetState extends State<_VoiceSheet> {
 
     final hasFilters = command.timeFilter != null ||
         command.durationFilter != null ||
-        command.priorityFilter != null;
+        command.priorityFilter != null ||
+        command.dayFilter != null;
 
     final filtered = hasFilters
         ? parser.applyFilter(allTasks, command)
@@ -241,38 +242,45 @@ class _VoiceSheetState extends State<_VoiceSheet> {
 
             const SizedBox(height: 12),
 
-            GestureDetector(
-              onTap: _toggleListening,
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 300),
-                width: 64,
-                height: 64,
-                decoration: BoxDecoration(
-                  gradient: _isListening
-                      ? const LinearGradient(
-                          colors: [AppTheme.highPriority, AppTheme.mediumPriority])
-                      : _speechAvailable
-                          ? AppTheme.primaryGradient
-                          : LinearGradient(colors: [
-                              AppTheme.textMuted.withOpacity(0.4),
-                              AppTheme.textMuted.withOpacity(0.25),
-                            ]),
-                  shape: BoxShape.circle,
-                  boxShadow: [
-                    BoxShadow(
-                      color: (_isListening
-                              ? AppTheme.highPriority
-                              : AppTheme.primary)
-                          .withOpacity(_speechAvailable ? 0.5 : 0.15),
-                      blurRadius: 18,
-                      spreadRadius: _isListening ? 5 : 2,
-                    ),
-                  ],
-                ),
-                child: Icon(
-                  _isListening ? Icons.mic : Icons.mic_none,
-                  color: Colors.white,
-                  size: 26,
+            // Use Material+InkWell so taps aren't swallowed by DraggableScrollableSheet
+            Material(
+              color: Colors.transparent,
+              shape: const CircleBorder(),
+              clipBehavior: Clip.antiAlias,
+              child: InkWell(
+                onTap: _toggleListening,
+                splashColor: Colors.white24,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 300),
+                  width: 64,
+                  height: 64,
+                  decoration: BoxDecoration(
+                    gradient: _isListening
+                        ? const LinearGradient(
+                            colors: [AppTheme.highPriority, AppTheme.mediumPriority])
+                        : _speechAvailable
+                            ? AppTheme.primaryGradient
+                            : LinearGradient(colors: [
+                                AppTheme.textMuted.withOpacity(0.4),
+                                AppTheme.textMuted.withOpacity(0.25),
+                              ]),
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: (_isListening
+                                ? AppTheme.highPriority
+                                : AppTheme.primary)
+                            .withOpacity(_speechAvailable ? 0.5 : 0.15),
+                        blurRadius: 18,
+                        spreadRadius: _isListening ? 5 : 2,
+                      ),
+                    ],
+                  ),
+                  child: Icon(
+                    _isListening ? Icons.mic : Icons.mic_none,
+                    color: Colors.white,
+                    size: 26,
+                  ),
                 ),
               ),
             ),

@@ -258,12 +258,26 @@ class TaskNotifier extends StateNotifier<List<Task>> {
         .where((t) => t.scheduledStart == null && !t.isCompleted)
         .toList();
 
-    final allToOptimize = [...scheduled, ...unscheduled];
+    // Orphaned _part_ tasks: original is completed but the part is still active.
+    // Include them in optimization so they get properly rescheduled (e.g. "Gym ч.2"
+    // when original "Gym" is done — it should be treated as a normal schedulable task).
+    final orphanedParts = state.where((t) {
+      if (!t.id.contains('_part_') || t.isCompleted) return false;
+      final originalId = t.id.split('_part_').first;
+      final origIdx = state.indexWhere((o) => o.id == originalId);
+      return origIdx != -1 && state[origIdx].isCompleted;
+    }).toList();
+
+    final allToOptimize = [...scheduled, ...unscheduled, ...orphanedParts];
     if (allToOptimize.isEmpty) return [];
 
     // Восстанавливаем полную продолжительность задач, которые были разбиты:
     // оригинальная задача хранит только первый кусок, остальное в _part_ задачах.
+    // Orphaned parts are already standalone — just reset their scheduledStart.
     final virtualTasks = allToOptimize.map((t) {
+      if (t.id.contains('_part_')) {
+        return t.copyWith(scheduledStart: null);
+      }
       final parts = state
           .where((p) => p.id.startsWith('${t.id}_part_') && !p.isCompleted)
           .toList();
@@ -274,10 +288,13 @@ class TaskNotifier extends StateNotifier<List<Task>> {
       return t.copyWith(scheduledStart: null, estimatedMinutes: totalMinutes);
     }).toList();
 
-    // Строим расписание заново с нуля
+    // No fixed slots needed — all active tasks are re-optimized together.
+    final fixedSlots = <Task>[];
+
+    // Строим расписание заново, учитывая фиксированные слоты
     final suggestions = scheduler.scheduleMultiDay(
       virtualTasks,
-      [], // Передаём пустой список — перестраиваем полностью
+      fixedSlots,
       DateTime.now(),
       priorityFirst: priorityFirst || byDeadline,
       shortFirst: byDuration,

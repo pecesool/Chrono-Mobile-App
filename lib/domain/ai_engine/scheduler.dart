@@ -129,9 +129,11 @@ class AIScheduler {
           );
         }
 
-        // Last resort: ignore deadline boundary AND load limits.
-        // A high-priority task that missed its deadline still needs a slot.
+        // Last resort: relax load limits and, only for truly overdue tasks
+        // (deadline already passed), also extend past the deadline.
+        // Never push a future-deadline task past its deadline.
         if (!placed2) {
+          final isOverdue = daysUntilDeadline < 0;
           _placeTask(
             task: task,
             result: result,
@@ -140,7 +142,7 @@ class AIScheduler {
             startDate: startDate,
             fromDayStart: fromDayStart,
             relaxLoad: true,
-            extendedRange: true,
+            extendedRange: isOverdue,
           );
         }
       }
@@ -188,20 +190,9 @@ class AIScheduler {
       );
     }
 
-    // Urgent multi-chunk task: try to fit all chunks on the same day first
-    if (isUrgent) {
-      if (_placeSameDayChunks(
-        chunks: chunks,
-        result: result,
-        occupiedByDay: occupiedByDay,
-        minutesByDay: minutesByDay,
-        targetDay: _dayKey(deadlineDay).isBefore(today) ? today : _dayKey(deadlineDay),
-        fromDayStart: fromDayStart,
-      )) {
-        return true;
-      }
-    }
-
+    // Spread chunks starting from today.
+    // allowSameDay=true for urgent tasks so multiple chunks can share one day,
+    // filling today's free slots before spilling into the deadline day.
     return _spreadChunksAcrossDifferentDays(
       task: task,
       chunks: chunks,
@@ -295,6 +286,10 @@ class AIScheduler {
 
   /// Распределяем части задачи по дням с перерывом между сессиями.
   /// allowSameDay=true (urgent): все части могут лечь в один день.
+  ///
+  /// Works on COPIES of occupiedByDay/minutesByDay so that a partial failure
+  /// (chunks 1–2 placed, chunk 3 fails) leaves the original maps untouched.
+  /// Changes are committed only when ALL chunks are successfully placed.
   bool _spreadChunksAcrossDifferentDays({
     required Task task,
     required List<Task> chunks,
@@ -310,6 +305,13 @@ class AIScheduler {
     bool allowSameDay = false,
   }) {
     final placedChunks = <ScheduledTask>[];
+
+    // Work on temporary copies — commit only when all chunks succeed
+    final tempOccupied = Map<DateTime, List<TimeSlot>>.fromEntries(
+      occupiedByDay.entries.map((e) => MapEntry(e.key, List<TimeSlot>.from(e.value))),
+    );
+    final tempMinutes = Map<DateTime, int>.from(minutesByDay);
+
     int searchFromDay = 0;
     int? lastPlacedDay;
 
@@ -326,7 +328,7 @@ class AIScheduler {
         // Enforce different days unless urgent (allowSameDay)
         if (!allowSameDay && lastPlacedDay != null && d == lastPlacedDay) continue;
 
-        final dayMinutes = minutesByDay[targetDayKey] ?? 0;
+        final dayMinutes = tempMinutes[targetDayKey] ?? 0;
         final maxDayMinutes = config.maxTaskHoursPerDay * 60;
 
         // Skip overloaded days unless relaxing load limits
@@ -334,7 +336,7 @@ class AIScheduler {
           continue;
         }
 
-        final occupied = List<TimeSlot>.from(occupiedByDay[targetDayKey] ?? []);
+        final occupied = List<TimeSlot>.from(tempOccupied[targetDayKey] ?? []);
         final freeSlots = _generateFreeSlots(
           targetDay,
           occupied,
@@ -345,17 +347,14 @@ class AIScheduler {
         if (slot != null) {
           final slotEnd = slot.start.add(Duration(minutes: chunk.estimatedMinutes));
 
-          occupiedByDay.putIfAbsent(targetDayKey, () => []).add(
-            TimeSlot(slot.start, slotEnd),
-          );
+          tempOccupied.putIfAbsent(targetDayKey, () => []).add(TimeSlot(slot.start, slotEnd));
 
-          // Перерыв между чанками внутри дня (на всякий случай)
           final breakEnd = slotEnd.add(Duration(minutes: config.breakBetweenChunks));
           if (breakEnd.hour < 23) {
-            occupiedByDay[targetDayKey]!.add(TimeSlot(slotEnd, breakEnd));
+            tempOccupied[targetDayKey]!.add(TimeSlot(slotEnd, breakEnd));
           }
 
-          minutesByDay[targetDayKey] = dayMinutes + chunk.estimatedMinutes;
+          tempMinutes[targetDayKey] = dayMinutes + chunk.estimatedMinutes;
 
           placedChunks.add(ScheduledTask(task: chunk, startTime: slot.start));
           lastPlacedDay = d;
@@ -366,57 +365,23 @@ class AIScheduler {
       }
 
       if (!chunkPlaced) {
-        // Не удалось разместить эту часть — откат
+        // Temp maps are simply discarded — original maps stay clean
         return false;
       }
     }
 
+    // All chunks placed — commit temp maps to actual maps
+    for (final entry in tempOccupied.entries) {
+      occupiedByDay[entry.key] = entry.value;
+    }
+    for (final entry in tempMinutes.entries) {
+      minutesByDay[entry.key] = entry.value;
+    }
     result.addAll(placedChunks);
     return true;
   }
 
-  /// Fits all chunks on a single day (for urgent deadlines).
-  /// Each chunk is separated by breakBetweenChunks minutes.
-  bool _placeSameDayChunks({
-    required List<Task> chunks,
-    required List<ScheduledTask> result,
-    required Map<DateTime, List<TimeSlot>> occupiedByDay,
-    required Map<DateTime, int> minutesByDay,
-    required DateTime targetDay,
-    required bool fromDayStart,
-  }) {
-    final placedChunks = <ScheduledTask>[];
-    final occupied = List<TimeSlot>.from(occupiedByDay[targetDay] ?? []);
 
-    for (final chunk in chunks) {
-      final freeSlots = _generateFreeSlots(
-        targetDay,
-        occupied,
-        fromDayStart: fromDayStart,
-      );
-      final slot = _findBestSlot(chunk, freeSlots);
-      if (slot == null) return false;
-
-      final slotEnd = slot.start.add(Duration(minutes: chunk.estimatedMinutes));
-      occupied.add(TimeSlot(slot.start, slotEnd));
-      final breakEnd = slotEnd.add(Duration(minutes: config.breakBetweenChunks));
-      if (breakEnd.hour < 23) occupied.add(TimeSlot(slotEnd, breakEnd));
-
-      placedChunks.add(ScheduledTask(task: chunk, startTime: slot.start));
-    }
-
-    // Commit all placements
-    for (final pc in placedChunks) {
-      final slotEnd = pc.startTime.add(Duration(minutes: pc.task.estimatedMinutes));
-      occupiedByDay.putIfAbsent(targetDay, () => []).add(TimeSlot(pc.startTime, slotEnd));
-      final breakEnd = slotEnd.add(Duration(minutes: config.breakBetweenChunks));
-      if (breakEnd.hour < 23) occupiedByDay[targetDay]!.add(TimeSlot(slotEnd, breakEnd));
-      minutesByDay[targetDay] = (minutesByDay[targetDay] ?? 0) + pc.task.estimatedMinutes;
-    }
-
-    result.addAll(placedChunks);
-    return true;
-  }
 
   _DayCandidate _selectBestCandidate(List<_DayCandidate> candidates, Task task) {
     if (!config.distributeEvenly) return candidates.first;
@@ -440,9 +405,13 @@ class AIScheduler {
       }
     }
 
-    // Для всех остальных — наименее загруженный день
+    // Least loaded day; prefer earlier day when loads are equal
     final sorted = List<_DayCandidate>.from(candidates);
-    sorted.sort((a, b) => a.dayMinutes.compareTo(b.dayMinutes));
+    sorted.sort((a, b) {
+      final loadDiff = a.dayMinutes.compareTo(b.dayMinutes);
+      if (loadDiff != 0) return loadDiff;
+      return a.day.compareTo(b.day);
+    });
     return sorted.first;
   }
 

@@ -49,26 +49,20 @@ class HiveService {
   }
 
   static Future<void> deleteTask(String id) async {
-    // Delete the task itself
     await tasksBox.delete(id);
 
-    // Find the base ID (remove _part_N suffix if present)
-    String baseId = id;
-    if (id.contains('_part_')) {
-      baseId = id.split('_part_').first;
-    }
-
-    // Delete ALL parts associated with this base ID
-    final keysToDelete = <String>[];
-    for (final entry in tasksBox.toMap().entries) {
-      final taskId = entry.value.id;
-      // Delete if it's a part of this base task
-      if (taskId.startsWith('${baseId}_part_')) {
-        keysToDelete.add(entry.key);
+    // Only cascade-delete sibling parts when deleting an ORIGINAL task.
+    // Deleting a _part_ task (e.g. "111 ч.2") must NOT touch other parts.
+    if (!id.contains('_part_')) {
+      final keysToDelete = <String>[];
+      for (final entry in tasksBox.toMap().entries) {
+        if (entry.value.id.startsWith('${id}_part_')) {
+          keysToDelete.add(entry.key);
+        }
       }
-    }
-    for (final key in keysToDelete) {
-      await tasksBox.delete(key);
+      for (final key in keysToDelete) {
+        await tasksBox.delete(key);
+      }
     }
   }
 
